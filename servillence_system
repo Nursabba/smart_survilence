@@ -1,0 +1,47 @@
+import cv2
+
+# Load Pretrained Human Detection Model
+hog = cv2.HOGDescriptor()
+hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+
+# Start Webcam / CCTV Camera
+camera = cv2.VideoCapture(0)
+
+print("AI Smart CCTV Running... Press Q to Exit")
+
+while True:
+    ret, frame = camera.read()
+
+    if not ret:
+        break
+
+    # Resize frame
+    frame = cv2.resize(frame,(640,480))
+
+    # Detect Humans
+    boxes, weights = hog.detectMultiScale(
+        frame,
+        winStride=(8,8)
+    )
+
+    # Draw Detection Boxes
+    for (x,y,w,h) in boxes:
+        cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),2)
+        cv2.putText(
+            frame,
+            "Person Detected",
+            (x,y-10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0,255,0),
+            2
+        )
+
+    cv2.imshow("AI Smart CCTV", frame)
+
+    # Exit Key
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        break
+
+camera.release()
+cv2.destroyAllWindows()
