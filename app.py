@@ -1,36 +1,28 @@
 import streamlit as st
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 from ultralytics import YOLO
 import cv2
-import tempfile
 
 st.title("AI Smart Surveillance System")
-
 model = YOLO("yolov8n.pt")
-video = st.file_uploader("Upload Video", type=["mp4","avi","mov"])
 
-if video:
-    tfile = tempfile.NamedTemporaryFile(delete=False)
-    tfile.write(video.read())
-
-    cap = cv2.VideoCapture(tfile.name)
-    frame_view = st.image([])
-
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        results = model(frame, verbose=False)[0]
+class Detector(VideoProcessorBase):
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        results = model(img, verbose=False)[0]
 
         for box in results.boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
             cls = int(box.cls[0])
-            if cls == 0:
-                cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
+            if cls in [0,2,3]:
+                x1,y1,x2,y2 = map(int, box.xyxy[0])
+                cv2.rectangle(img,(x1,y1),(x2,y2),(0,255,0),2)
 
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_view.image(frame)
+        return frame.from_ndarray(img, format="bgr24")
 
-    cap.release()
+webrtc_streamer(
+    key="surveillance",
+    video_processor_factory=Detector,
+    media_stream_constraints={"video": True, "audio": False},
+)
 
-    st.success("Surveillance completed")
+)
