@@ -1,10 +1,15 @@
 import streamlit as st
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 from ultralytics import YOLO
-import cv2, csv, os, time
+import av
+import cv2
+import csv
+import os
+import time
 from datetime import datetime
-import tempfile
 
-st.set_page_config(page_title="AI Smart Surveillance")
+st.set_page_config(page_title="AI Smart Surveillance", layout="wide")
+st.title("AI Smart Surveillance System")
 
 model = YOLO("yolov8n.pt")
 
@@ -12,87 +17,81 @@ os.makedirs("captures", exist_ok=True)
 os.makedirs("recordings", exist_ok=True)
 
 log_file = "surveillance_log.csv"
+
 if not os.path.exists(log_file):
     with open(log_file, "w", newline="") as f:
-        csv.writer(f).writerow(
-            ["Time","Persons","Cars","Bikes","Alert"]
-        )
+        writer = csv.writer(f)
+        writer.writerow(["Time","Persons","Cars","Bikes","Alert"])
 
-video = st.file_uploader(
-    "Upload CCTV Video",
-    type=["mp4","avi","mov"]
-)
-if video:
-    tfile = tempfile.NamedTemporaryFile(delete=False)
-    tfile.write(video.read())
+RX1, RY1, RX2, RY2 = 180,120,460,420
+last_capture = 0
+class Surveillance(VideoProcessorBase):
+    def recv(self, frame):
+        global last_capture
 
-    cap = cv2.VideoCapture(tfile.name)
+        img = frame.to_ndarray(format="bgr24")
+        img = cv2.resize(img, (640,480))
 
-    video_name = "recordings/" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".mp4"
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(video_name, fourcc, 20, (640,480))
+        results = model(img, verbose=False)[0]
 
-    RX1,RY1,RX2,RY2 = 180,120,460,420
-    frame_box = st.image([])
-    last_capture = 0
+        persons = cars = bikes = 0
+        alert = "NORMAL"
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        frame = cv2.resize(frame,(640,480))
-        results = model(frame, verbose=False)[0]
-
-        persons=cars=bikes=0
-        alert="NORMAL"
-
-        cv2.rectangle(frame,(RX1,RY1),(RX2,RY2),(0,0,255),2)
+        cv2.rectangle(img,(RX1,RY1),(RX2,RY2),(0,0,255),2)
+        cv2.putText(img,"Restricted Zone",(RX1,RY1-8),
+                    cv2.FONT_HERSHEY_SIMPLEX,0.6,(0,0,255),2)
 
         for box in results.boxes:
-            cls=int(box.cls[0])
-            conf=float(box.conf[0])
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
 
             if cls not in [0,2,3]:
                 continue
 
-            x1,y1,x2,y2=map(int,box.xyxy[0])
-            cx,cy=(x1+x2)//2,(y1+y2)//2
+            x1,y1,x2,y2 = map(int, box.xyxy[0])
+            cx,cy = (x1+x2)//2,(y1+y2)//2
 
-            if cls==0:
-                persons+=1
-                label="Person"
-                color=(0,255,0)
-            elif cls==2:
-                cars+=1
-                label="Car"
-                color=(255,0,0)
+            if cls == 0:
+                persons += 1
+                label,color = "Person",(0,255,0)
+            elif cls == 2:
+                cars += 1
+                label,color = "Car",(255,0,0)
             else:
-                bikes+=1
-                label="Bike"
-                color=(0,255,255)
+                bikes += 1
+                label,color = "Bike",(0,255,255)
 
-            cv2.rectangle(frame,(x1,y1),(x2,y2),color,2)
-            cv2.putText(frame,f"{label} {conf:.2f}",(x1,y1-5),
+            cv2.rectangle(img,(x1,y1),(x2,y2),color,2)
+            cv2.circle(img,(cx,cy),3,color,-1)
+            cv2.putText(img,f"{label} {conf:.2f}",
+                        (x1,max(20,y1-8)),
                         cv2.FONT_HERSHEY_SIMPLEX,0.5,color,2)
 
-            if cls==0 and RX1<cx<RX2 and RY1<cy<RY2:
-                alert="INTRUSION ALERT"
+            if cls == 0 and RX1 < cx < RX2 and RY1 < cy < RY2:
+                alert = "INTRUSION ALERT"
+                now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
-        if alert=="INTRUSION ALERT" and time.time()-last_capture>5:
-            img="captures/"+datetime.now().strftime("%Y%m%d_%H%M%S")+".jpg"
-            cv2.imwrite(img,frame)
-            last_capture=time.time()
+        with open(log_file, "a", newline="") as f:
+            csv.writer(f).writerow([now, persons, cars, bikes, alert])
 
-        now=datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-        with open(log_file,"a",newline="") as f:
-            csv.writer(f).writerow([now,persons,cars,bikes,alert])
+        if alert == "INTRUSION ALERT" and time.time() - last_capture > 5:
+            img_name = f"captures/{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            cv2.imwrite(img_name, img)
+            last_capture = time.time()
 
-        out.write(frame)
+        cv2.rectangle(img, (0,0), (640,70), (30,30,30), -1)
+        cv2.putText(img, f"Person:{persons} Car:{cars} Bike:{bikes}",
+                    (10,25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
 
-        rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-        frame_box.image(rgb)
+        color = (0,255,0) if alert=="NORMAL" else (0,0,255)
+        cv2.putText(img, alert, (10,50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    out.release()
-    cap.release()
-    st.success("Surveillance Completed")
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+webrtc_streamer(
+    key="AI-Surveillance",
+    video_processor_factory=Surveillance,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True
+)
